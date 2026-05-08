@@ -114,7 +114,7 @@ def send_join_required(chat_id):
         ]
     }
     send_message(chat_id, 
-        f"🚨 *Accès restreint*\n\n"
+        f"🚨 Accès restreint\n\n"
         f"Pour utiliser ce bot, vous devez d'abord rejoindre notre canal.\n\n"
         f"👥 Canal: {CHANNEL_USERNAME}\n\n"
         f"Rejoignez et cliquez sur *'J\\'ai rejoint'* pour continuer.\n\n"

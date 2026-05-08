@@ -4,13 +4,16 @@ import random
 import json
 import smtplib
 import os
+import threading
 from email.message import EmailMessage
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ================= CONFIGURATION =================
 ADMIN_ID = 7684684739
 CHANNEL_USERNAME = "@wabanreport"
 CHANNEL_LINK = "https://t.me/+tmrGH8UwjUw4ODY0"
+PORT = int(os.environ.get('PORT', 8080))
 
 def load_env():
     if not os.path.exists('.env'):
@@ -86,9 +89,8 @@ MAX_REPORTS = 3
 EMAIL_DELAY = float(os.getenv('EMAIL_DELAY', '2.0'))
 MAX_REPORTS_PER_HOUR = 10
 
-# ================= VÉRIFICATION MEMBRE CANAL (À CHAQUE FOIS) =================
+# ================= VÉRIFICATION MEMBRE CANAL =================
 def check_membership(user_id):
-    """Vérifie en temps réel si l'utilisateur est membre du canal"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getChatMember"
     params = {'chat_id': CHANNEL_USERNAME, 'user_id': user_id}
     try:
@@ -102,11 +104,9 @@ def check_membership(user_id):
         return False
 
 def is_member(user_id):
-    """Vérification en temps réel - pas de cache"""
     return check_membership(user_id)
 
 def send_join_required(chat_id):
-    """Envoie le message d'obligation de rejoindre le canal"""
     keyboard = {
         'inline_keyboard': [
             [{'text': '📢 Rejoindre le canal', 'url': CHANNEL_LINK}],
@@ -228,7 +228,8 @@ def send_message_and_get_id(chat_id, text):
     resp = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={'chat_id': chat_id, 'text': text}, timeout=10).json()
     return resp.get('result') if resp.get('ok') else None
 
-user_sessions, user_stats = {}, {}
+user_sessions = {}
+user_stats = {}
 
 def check_rate_limit(user_id):
     now = time.time()
@@ -316,9 +317,27 @@ def list_recipients(chat_id):
 def stats_admin(chat_id):
     send_message(chat_id, f"📊 Statistiques:\n\nComptes SMTP: {len(SMTP_ACCOUNTS)}\nDestinataires: {len(WHATSAPP_RECIPIENTS)}\nLimite rapports/heure: {MAX_REPORTS_PER_HOUR}")
 
+# ================= SERVEUR HTTP POUR RENDER =================
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/' or self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'Bot is running')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    def log_message(self, format, *args):
+        pass
+
+def run_http_server():
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    print(f"✅ Serveur HTTP démarré sur le port {PORT}")
+    server.serve_forever()
+
 # ================= COMMANDES =================
 def handle_command(chat_id, user_id, cmd):
-    # Vérification en temps réel à chaque commande (sauf /start qui a sa propre vérification)
     if cmd not in ['/start', '/admin']:
         if not is_member(user_id):
             send_join_required(chat_id)
@@ -430,7 +449,6 @@ def handle_callback(callback):
     data = callback['data']
     answer_callback(callback['id'])
 
-    # Vérification "J'ai rejoint"
     if data == 'verify_join':
         if is_member(user_id):
             edit_message(chat_id, msg_id, "✅ Vérification réussie ! Vous pouvez maintenant utiliser le bot.\n\n/report - Signalement\n/autoreport - Mode auto\n/stats - Votre quota")
@@ -494,11 +512,18 @@ def handle_callback(callback):
     elif data == 'admin_stats':
         stats_admin(chat_id)
 
+# ================= MAIN =================
 def main():
-    print("Bot démarré - Mode admin actif")
-    print(f"SMTP: {len(SMTP_ACCOUNTS)} | Destinataires: {len(WHATSAPP_RECIPIENTS)}")
-    print(f"Canal requis: {CHANNEL_USERNAME}")
-    print("Vérification à chaque commande (pas de cache)")
+    http_thread = threading.Thread(target=run_http_server, daemon=True)
+    http_thread.start()
+
+    print("🤖 Bot WhatsApp Reporter démarré")
+    print(f"   Canal requis: {CHANNEL_USERNAME}")
+    print(f"   Admin ID: {ADMIN_ID}")
+    print(f"   SMTP utilisés: {len(SMTP_ACCOUNTS)}")
+    print(f"   Destinataires: {len(WHATSAPP_RECIPIENTS)}")
+    print(f"   Port HTTP: {PORT} (ouvert pour Render)")
+
     last_id = 0
     while True:
         try:
@@ -516,7 +541,7 @@ def main():
                         else:
                             handle_text(msg['chat']['id'], msg['from']['id'], text)
         except Exception as e:
-            print(f"Erreur: {e}")
+            print(f"Erreur polling: {e}")
         time.sleep(1)
 
 if __name__ == '__main__':

@@ -89,6 +89,22 @@ MAX_REPORTS = 3
 EMAIL_DELAY = float(os.getenv('EMAIL_DELAY', '2.0'))
 MAX_REPORTS_PER_HOUR = 10
 
+# ================= TEST SMTP AU DÉMARRAGE =================
+def test_smtp_connection():
+    if not SMTP_ACCOUNTS:
+        print("⚠️ Aucun compte SMTP à tester")
+        return
+    print("🔍 Test de connexion SMTP avec le premier compte...")
+    acc = SMTP_ACCOUNTS[0]
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as server:
+            server.login(acc['email'], acc['password'])
+            print(f"✅ Connexion SMTP réussie avec {acc['email']}")
+    except Exception as e:
+        print(f"❌ Échec connexion SMTP avec {acc['email']}: {e}")
+
+test_smtp_connection()
+
 # ================= VÉRIFICATION MEMBRE CANAL =================
 def check_membership(user_id):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getChatMember"
@@ -114,7 +130,7 @@ def send_join_required(chat_id):
         ]
     }
     send_message(chat_id, 
-        f"🚨 Accès restreint\n\n"
+        f"🚨 *Accès restreint*\n\n"
         f"Pour utiliser ce bot, vous devez d'abord rejoindre notre canal.\n\n"
         f"👥 Canal: {CHANNEL_USERNAME}\n\n"
         f"Rejoignez et cliquez sur *'J\\'ai rejoint'* pour continuer.\n\n"
@@ -163,7 +179,7 @@ Sincerely,
 def generate_subject(number, category):
     return random.choice([f"Violation - {number} ({category})", f"Complaint: {category} from {number}", f"URGENT: {category} - {number}"])
 
-# ================= ENVOI SMTP =================
+# ================= ENVOI SMTP AVEC LOGS DÉTAILLÉS =================
 def send_email(account, to, subject, body, sender_name):
     try:
         msg = EmailMessage()
@@ -174,9 +190,12 @@ def send_email(account, to, subject, body, sender_name):
         with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as server:
             server.login(account['email'], account['password'])
             server.send_message(msg)
+        print(f"✅ Email envoyé par {account['email']} vers {to}")
         return True, None
     except Exception as e:
-        return False, str(e)
+        err_msg = str(e)
+        print(f"❌ Erreur SMTP avec {account['email']}: {err_msg}")
+        return False, err_msg
 
 def send_single_report(chat_id, msg_id, number, category, recipient):
     if not SMTP_ACCOUNTS:
@@ -184,7 +203,13 @@ def send_single_report(chat_id, msg_id, number, category, recipient):
         return 0, 1
     account = random.choice(SMTP_ACCOUNTS)
     sender = random_sender_name()
-    ok, _ = send_email(account, recipient, generate_subject(number, category), generate_detailed_report(number, category), sender)
+    ok, err = send_email(account, recipient, generate_subject(number, category), generate_detailed_report(number, category), sender)
+    if ok:
+        edit_message(chat_id, msg_id, f"✅ Envoi réussi !\n\n📊 Rapports: 1\n✅ Succès: 1\n❌ Échecs: 0")
+    else:
+        edit_message(chat_id, msg_id, f"❌ Échec de l'envoi\n\nErreur: {err}\nVérifiez les logs du bot.")
+        # Envoyer l'erreur à l'admin
+        send_message(ADMIN_ID, f"Erreur SMTP pour {recipient} depuis {account['email']}:\n{err}")
     return 1 if ok else 0, 0 if ok else 1
 
 def send_multiple_reports(chat_id, msg_id, number, category, quantity, recipient):
@@ -195,11 +220,13 @@ def send_multiple_reports(chat_id, msg_id, number, category, quantity, recipient
     for i in range(quantity):
         account = random.choice(SMTP_ACCOUNTS)
         sender = random_sender_name()
-        ok, _ = send_email(account, recipient, generate_subject(number, category), generate_detailed_report(number, category, i+1), sender)
+        ok, err = send_email(account, recipient, generate_subject(number, category), generate_detailed_report(number, category, i+1), sender)
         if ok:
             success += 1
         else:
             fail += 1
+            # Log l'erreur pour l'admin
+            send_message(ADMIN_ID, f"Erreur rapport {i+1}/{quantity}: {err} (compte {account['email']})")
         edit_message(chat_id, msg_id, f"📤 Progression: {i+1}/{quantity} | ✅ {success} | ❌ {fail}")
         time.sleep(EMAIL_DELAY)
     
@@ -271,6 +298,13 @@ def add_smtp_account(chat_id, email, password):
     SMTP_ACCOUNTS.append({"email": email, "password": password})
     save_smtp_accounts(SMTP_ACCOUNTS)
     send_message(chat_id, f"✅ Compte SMTP ajouté: {email}")
+    # Tester immédiatement
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as server:
+            server.login(email, password)
+        send_message(chat_id, f"✅ Test de connexion réussi avec {email}")
+    except Exception as e:
+        send_message(chat_id, f"⚠️ Le compte {email} a été ajouté mais la connexion SMTP a échoué: {e}")
 
 def remove_smtp_account(chat_id, email):
     global SMTP_ACCOUNTS
@@ -317,7 +351,7 @@ def list_recipients(chat_id):
 def stats_admin(chat_id):
     send_message(chat_id, f"📊 Statistiques:\n\nComptes SMTP: {len(SMTP_ACCOUNTS)}\nDestinataires: {len(WHATSAPP_RECIPIENTS)}\nLimite rapports/heure: {MAX_REPORTS_PER_HOUR}")
 
-# ================= SERVEUR HTTP POUR RENDER =================
+# ================= SERVEUR HTTP =================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/' or self.path == '/health':

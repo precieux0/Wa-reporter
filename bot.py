@@ -89,15 +89,16 @@ MAX_REPORTS = 3
 EMAIL_DELAY = float(os.getenv('EMAIL_DELAY', '2.0'))
 MAX_REPORTS_PER_HOUR = 10
 
-# ================= TEST SMTP AU DÉMARRAGE =================
+# ================= TEST SMTP CORRIGÉ (PORT 587 + STARTTLS) =================
 def test_smtp_connection():
     if not SMTP_ACCOUNTS:
         print("⚠️ Aucun compte SMTP à tester")
         return
-    print("🔍 Test de connexion SMTP avec le premier compte...")
+    print("🔍 Test de connexion SMTP (port 587, STARTTLS) avec le premier compte...")
     acc = SMTP_ACCOUNTS[0]
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as server:
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=15) as server:
+            server.starttls()
             server.login(acc['email'], acc['password'])
             print(f"✅ Connexion SMTP réussie avec {acc['email']}")
     except Exception as e:
@@ -179,7 +180,7 @@ Sincerely,
 def generate_subject(number, category):
     return random.choice([f"Violation - {number} ({category})", f"Complaint: {category} from {number}", f"URGENT: {category} - {number}"])
 
-# ================= ENVOI SMTP AVEC LOGS DÉTAILLÉS =================
+# ================= ENVOI SMTP CORRIGÉ (PORT 587 + STARTTLS) =================
 def send_email(account, to, subject, body, sender_name):
     try:
         msg = EmailMessage()
@@ -187,7 +188,9 @@ def send_email(account, to, subject, body, sender_name):
         msg['Subject'] = subject
         msg['From'] = f'"{sender_name}" <{account["email"]}>'
         msg['To'] = to
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as server:
+        # Utilisation du port 587 avec STARTTLS (plus fiable sur Render)
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as server:
+            server.starttls()
             server.login(account['email'], account['password'])
             server.send_message(msg)
         print(f"✅ Email envoyé par {account['email']} vers {to}")
@@ -208,7 +211,6 @@ def send_single_report(chat_id, msg_id, number, category, recipient):
         edit_message(chat_id, msg_id, f"✅ Envoi réussi !\n\n📊 Rapports: 1\n✅ Succès: 1\n❌ Échecs: 0")
     else:
         edit_message(chat_id, msg_id, f"❌ Échec de l'envoi\n\nErreur: {err}\nVérifiez les logs du bot.")
-        # Envoyer l'erreur à l'admin
         send_message(ADMIN_ID, f"Erreur SMTP pour {recipient} depuis {account['email']}:\n{err}")
     return 1 if ok else 0, 0 if ok else 1
 
@@ -225,7 +227,6 @@ def send_multiple_reports(chat_id, msg_id, number, category, quantity, recipient
             success += 1
         else:
             fail += 1
-            # Log l'erreur pour l'admin
             send_message(ADMIN_ID, f"Erreur rapport {i+1}/{quantity}: {err} (compte {account['email']})")
         edit_message(chat_id, msg_id, f"📤 Progression: {i+1}/{quantity} | ✅ {success} | ❌ {fail}")
         time.sleep(EMAIL_DELAY)
@@ -298,9 +299,10 @@ def add_smtp_account(chat_id, email, password):
     SMTP_ACCOUNTS.append({"email": email, "password": password})
     save_smtp_accounts(SMTP_ACCOUNTS)
     send_message(chat_id, f"✅ Compte SMTP ajouté: {email}")
-    # Tester immédiatement
+    # Test de connexion avec port 587 + STARTTLS
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as server:
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=15) as server:
+            server.starttls()
             server.login(email, password)
         send_message(chat_id, f"✅ Test de connexion réussi avec {email}")
     except Exception as e:
@@ -351,7 +353,7 @@ def list_recipients(chat_id):
 def stats_admin(chat_id):
     send_message(chat_id, f"📊 Statistiques:\n\nComptes SMTP: {len(SMTP_ACCOUNTS)}\nDestinataires: {len(WHATSAPP_RECIPIENTS)}\nLimite rapports/heure: {MAX_REPORTS_PER_HOUR}")
 
-# ================= SERVEUR HTTP =================
+# ================= SERVEUR HTTP POUR RENDER =================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/' or self.path == '/health':
